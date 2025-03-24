@@ -8,127 +8,165 @@ import (
 	"go/printer"
 	"go/token"
 	"go/types"
+	"os"
+	"os/exec"
 
 	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/imports"
+
+	// required so that the package is downloaded before functions get transformed
+	_ "github.com/gin-gonic/gin"
 )
 
 var currPort int
 
 func main() {
-    numOfServices := 0
-    currPort = 9000
-    filePath := "examples/test.go"
+	numOfServices := 0
+	currPort = 9000
+	workingDir, err := os.Getwd()
+	if err != nil {
+		fmt.Println(err)
+	}
+	filePath := "examples/test.go"
+	outputDirPath := "/media/data/Documents/projects/sigbovik/microservices/output"
 
-    fset := token.NewFileSet()
-    f, err := parser.ParseFile(fset, filePath, nil, parser.AllErrors) 
-    if err != nil {
-        fmt.Println(err)
-    }
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, filePath, nil, parser.AllErrors)
+	if err != nil {
+		fmt.Println(err)
+	}
 
-    ast.Inspect(f, func(n ast.Node) bool {
-        switch x := n.(type) {
-        case *ast.FuncDecl:
-            if x.Name.Name != "main" {
-                numOfServices++ 
-            }
-        }
-        return true
-    })
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.FuncDecl:
+			if x.Name.Name != "main" {
+				numOfServices++
+			}
+		}
+		return true
+	})
 
-    funcNames := make([]string, numOfServices)
-    funcTypes := make([]*ast.FuncType, numOfServices)
-    portNums := make([]int, numOfServices)
-    services := make([]*ast.File, numOfServices)
-    servicesFsets := make([]*token.FileSet, numOfServices)
+	funcNames := make([]string, numOfServices)
+	funcTypes := make([]*ast.FuncType, numOfServices)
+	portNums := make([]int, numOfServices)
+	services := make([]*ast.File, numOfServices)
+	servicesFsets := make([]*token.FileSet, numOfServices)
 
-    index := 0
-    astutil.Apply(f, nil, func(c *astutil.Cursor) bool {
-        n := c.Node()
-        switch x := n.(type) {
-        case *ast.FuncDecl:
-            if x.Name.Name != "main" {
-                funcNames[index] = x.Name.Name
-                funcTypes[index] = x.Type
-                portNums[index] = currPort
-                index++
+	index := 0
+	astutil.Apply(f, nil, func(c *astutil.Cursor) bool {
+		n := c.Node()
+		switch x := n.(type) {
+		case *ast.FuncDecl:
+			if x.Name.Name != "main" {
+				funcNames[index] = x.Name.Name
+				funcTypes[index] = x.Type
+				portNums[index] = currPort
+				index++
 
-                if x.Type.Params.NumFields() == 1 {
-                    if x.Type.Results.NumFields() == 1 {
-                        x.Body.List = oneArgFuncWithReturnBody(x.Type.Params.List[0].Names[0].Name, types.ExprString(x.Type.Results.List[0].Type))
-                    } else {
-                        x.Body.List = oneArgFuncBody(x.Type.Params.List[0].Names[0].Name)
-                    }
-                } else {
-                    x.Body.List = simpleFuncBody()
-                }
-            }
-        }
+				if x.Type.Params.NumFields() == 1 {
+					if x.Type.Results.NumFields() == 1 {
+						x.Body.List = oneArgFuncWithReturnBody(x.Type.Params.List[0].Names[0].Name, types.ExprString(x.Type.Results.List[0].Type))
+					} else {
+						x.Body.List = oneArgFuncBody(x.Type.Params.List[0].Names[0].Name)
+					}
+				} else {
+					x.Body.List = simpleFuncBody()
+				}
+			}
+		}
 
-        return true
-    })
+		return true
+	})
 
-    for i := 0; i < len(services); i++ {
-        servicesFsets[i] = token.NewFileSet()
-        services[i], err = parser.ParseFile(servicesFsets[0], filePath, nil, parser.AllErrors)
-        if err != nil {
-            fmt.Println(err)
-        }
-        astutil.Apply(services[i], nil, func(c *astutil.Cursor) bool {
-            n := c.Node()
-            switch x := n.(type) {
-            case *ast.FuncDecl:
-                if x.Name.Name != "main" && x.Name.Name != funcNames[i] {
-                    if x.Type.Params.NumFields() == 1 {
-                        if x.Type.Results.NumFields() == 1 {
-                            x.Body.List = oneArgFuncWithReturnBody(x.Type.Params.List[0].Names[0].Name, types.ExprString(x.Type.Results.List[0].Type))
-                        } else {
-                            x.Body.List = oneArgFuncBody(x.Type.Params.List[0].Names[0].Name)
-                        }
-                    } else {
-                        x.Body.List = simpleFuncBody()
-                    }
-                } else if x.Name.Name == "main" {
-                    if funcTypes[i].Params.NumFields() == 1 {
-                        if funcTypes[i].Results.NumFields() == 1 {
-                            x.Body.List = oneArgWithReturnMainBody(funcNames[i], portNums[i], types.ExprString(funcTypes[i].Params.List[0].Type))
-                        } else {
-                            x.Body.List = oneArgMainBody(funcNames[i], portNums[i], types.ExprString(funcTypes[i].Params.List[0].Type))
-                        }
-                    } else {
-                        x.Body.List = simpleMainBody(funcNames[i], portNums[i])
-                    }
-                }
-            }
-            return true
-        })
-        buf := new(bytes.Buffer)
-        printer.Fprint(buf, servicesFsets[i], services[i])
-        serviceSrc := buf.String()
-        fixedBytes, err := imports.Process(filePath, []byte(serviceSrc), nil)
-        if err != nil {
-            fmt.Println(err)
-        }
+	for i := 0; i < len(services); i++ {
+		servicesFsets[i] = token.NewFileSet()
+		services[i], err = parser.ParseFile(servicesFsets[0], filePath, nil, parser.AllErrors)
+		if err != nil {
+			fmt.Println(err)
+		}
+		astutil.Apply(services[i], nil, func(c *astutil.Cursor) bool {
+			n := c.Node()
+			switch x := n.(type) {
+			case *ast.FuncDecl:
+				if x.Name.Name != "main" && x.Name.Name != funcNames[i] {
+					if x.Type.Params.NumFields() == 1 {
+						if x.Type.Results.NumFields() == 1 {
+							x.Body.List = oneArgFuncWithReturnBody(x.Type.Params.List[0].Names[0].Name, types.ExprString(x.Type.Results.List[0].Type))
+						} else {
+							x.Body.List = oneArgFuncBody(x.Type.Params.List[0].Names[0].Name)
+						}
+					} else {
+						x.Body.List = simpleFuncBody()
+					}
+				} else if x.Name.Name == "main" {
+					if funcTypes[i].Params.NumFields() == 1 {
+						if funcTypes[i].Results.NumFields() == 1 {
+							x.Body.List = oneArgWithReturnMainBody(funcNames[i], portNums[i], types.ExprString(funcTypes[i].Params.List[0].Type))
+						} else {
+							x.Body.List = oneArgMainBody(funcNames[i], portNums[i], types.ExprString(funcTypes[i].Params.List[0].Type))
+						}
+					} else {
+						x.Body.List = simpleMainBody(funcNames[i], portNums[i])
+					}
+				}
+			}
+			return true
+		})
+		buf := new(bytes.Buffer)
+		printer.Fprint(buf, servicesFsets[i], services[i])
+		serviceSrc := buf.String()
+		fmt.Println(serviceSrc)
+		fixedBytes, err := imports.Process(filePath, []byte(serviceSrc), nil)
+		if err != nil {
+			fmt.Println(err)
+		}
 
-        fmt.Println("------------------ File " + funcNames[i]  + " --------------------")
-        fmt.Println(string(fixedBytes[:]))
-    }
+		fmt.Println("------------------ File " + funcNames[i] + " --------------------")
+		fmt.Println(string(fixedBytes[:]))
+		funcDir := outputDirPath + "/" + funcNames[i]
+		os.MkdirAll(funcDir, 0755)
+		os.WriteFile(funcDir+"/main.go", fixedBytes, 0644)
+		os.Chdir(funcDir)
+		err = exec.Command("go", "mod", "init", funcNames[i]).Run()
+		if err != nil {
+			fmt.Println(err)
+		}
+		err = exec.Command("go", "mod", "tidy").Run()
+		if err != nil {
+			fmt.Println(err)
+		}
+		os.Chdir(workingDir)
 
-    buf := new(bytes.Buffer) 
-    printer.Fprint(buf, fset, f)
-    newSrc := buf.String()
+	}
 
-    fixedBytes, err := imports.Process(filePath, []byte(newSrc), nil)
-    if err != nil {
-        fmt.Println(err)
-    }
+	buf := new(bytes.Buffer)
+	printer.Fprint(buf, fset, f)
+	newSrc := buf.String()
 
-    fmt.Println("------------------ File Main --------------------")
-    fmt.Println(string(fixedBytes[:]))
+	fixedBytes, err := imports.Process(filePath, []byte(newSrc), nil)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	fmt.Println("------------------ File Main --------------------")
+	fmt.Println(string(fixedBytes[:]))
+	funcDir := outputDirPath + "/main"
+	os.MkdirAll(funcDir, 0755)
+	os.WriteFile(funcDir+"/main.go", fixedBytes, 0644)
+	os.Chdir(funcDir)
+	err = exec.Command("go", "mod", "init", "main").Run()
+	if err != nil {
+		fmt.Println(err)
+	}
+	err = exec.Command("go", "mod", "tidy").Run()
+	if err != nil {
+		fmt.Println(err)
+	}
+	os.Chdir(workingDir)
 }
 
 func simpleMainBody(funcName string, portNum int) []ast.Stmt {
-    src := fmt.Sprintf(`
+	src := fmt.Sprintf(`
         package main
 
         import "fmt"
@@ -147,11 +185,11 @@ func simpleMainBody(funcName string, portNum int) []ast.Stmt {
             }
         }
         `, funcName, portNum)
-    return getBody(src) 
+	return getBody(src)
 }
 
 func oneArgMainBody(funcName string, portNum int, argType string) []ast.Stmt {
-    src := fmt.Sprintf(`
+	src := fmt.Sprintf(`
         package main
 
         import "fmt"
@@ -177,11 +215,11 @@ func oneArgMainBody(funcName string, portNum int, argType string) []ast.Stmt {
             }
         }
         `, argType, funcName, portNum)
-    return getBody(src) 
+	return getBody(src)
 }
 
 func oneArgWithReturnMainBody(funcName string, portNum int, argType string) []ast.Stmt {
-    src := fmt.Sprintf(`
+	src := fmt.Sprintf(`
         package main
 
         import "fmt"
@@ -207,11 +245,11 @@ func oneArgWithReturnMainBody(funcName string, portNum int, argType string) []as
             }
         }
         `, argType, funcName, portNum)
-    return getBody(src) 
+	return getBody(src)
 }
 
 func simpleFuncBody() []ast.Stmt {
-    src := fmt.Sprintf(`
+	src := fmt.Sprintf(`
         package main
 
         import "fmt"
@@ -226,13 +264,13 @@ func simpleFuncBody() []ast.Stmt {
             resp.Body.Close()
         }
         `, currPort)
-    currPort++
-   
-    return getBody(src) 
+	currPort++
+
+	return getBody(src)
 }
 
 func oneArgFuncBody(argName string) []ast.Stmt {
-    src := fmt.Sprintf(`
+	src := fmt.Sprintf(`
         package main
 
         import "fmt"
@@ -253,13 +291,13 @@ func oneArgFuncBody(argName string) []ast.Stmt {
             resp.Body.Close()
         }
         `, argName, currPort, argName)
-    currPort++
-   
-    return getBody(src) 
+	currPort++
+
+	return getBody(src)
 }
 
 func oneArgFuncWithReturnBody(argName string, retType string) []ast.Stmt {
-    src := fmt.Sprintf(`
+	src := fmt.Sprintf(`
         package main
 
         import "fmt"
@@ -287,25 +325,25 @@ func oneArgFuncWithReturnBody(argName string, retType string) []ast.Stmt {
             return rtn
         }
         `, argName, retType, currPort, argName, retType)
-    currPort++
-   
-    return getBody(src) 
+	currPort++
+
+	return getBody(src)
 }
 
 func getBody(src string) []ast.Stmt {
-    var rtn []ast.Stmt
-    f, err := parser.ParseFile(token.NewFileSet(), "", []byte(src), 0)
-    if err != nil {
-        fmt.Println(err)
-    }
+	var rtn []ast.Stmt
+	f, err := parser.ParseFile(token.NewFileSet(), "", []byte(src), 0)
+	if err != nil {
+		fmt.Println(err)
+	}
 
-    ast.Inspect(f, func(n ast.Node) bool {
-        switch x := n.(type) {
-        case *ast.FuncDecl:
-            rtn = x.Body.List
-        }
-        return true
-    })
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.FuncDecl:
+			rtn = x.Body.List
+		}
+		return true
+	})
 
-    return rtn
+	return rtn
 }
