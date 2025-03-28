@@ -28,7 +28,9 @@ func main() {
 		fmt.Println(err)
 	}
 	filePath := "examples/test.go"
-	outputDirPath := "/media/data/Documents/projects/sigbovik/microservices/output"
+	outputDirPath := workingDir + "/output"
+	writeToConsole := true
+	writeToFiles := true
 
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, filePath, nil, parser.AllErrors)
@@ -121,22 +123,29 @@ func main() {
 			fmt.Println(err)
 		}
 
-		fmt.Println("------------------ File " + funcNames[i] + " --------------------")
-		fmt.Println(string(fixedBytes[:]))
-		funcDir := outputDirPath + "/" + funcNames[i]
-		os.MkdirAll(funcDir, 0755)
-		os.WriteFile(funcDir+"/main.go", fixedBytes, 0644)
-		os.Chdir(funcDir)
-		err = exec.Command("go", "mod", "init", funcNames[i]).Run()
-		if err != nil {
-			fmt.Println(err)
+		if writeToConsole {
+			fmt.Println("------------------ File " + funcNames[i] + " --------------------")
+			fmt.Println(string(fixedBytes[:]))
 		}
-		err = exec.Command("go", "mod", "tidy").Run()
-		if err != nil {
-			fmt.Println(err)
+		if writeToFiles {
+			funcDir := outputDirPath + "/" + funcNames[i]
+			os.MkdirAll(funcDir, 0755)
+			os.WriteFile(funcDir+"/main.go", fixedBytes, 0644)
+			os.Chdir(funcDir)
+			err = exec.Command("go", "mod", "init", funcNames[i]).Run()
+			if err != nil {
+				fmt.Println(err)
+			}
+			err = exec.Command("go", "mod", "tidy").Run()
+			if err != nil {
+				fmt.Println(err)
+			}
+			err = exec.Command("go", "build").Run()
+			if err != nil {
+				fmt.Println(err)
+			}
+			os.Chdir(workingDir)
 		}
-		os.Chdir(workingDir)
-
 	}
 
 	buf := new(bytes.Buffer)
@@ -147,22 +156,30 @@ func main() {
 	if err != nil {
 		fmt.Println(err)
 	}
-
-	fmt.Println("------------------ File Main --------------------")
-	fmt.Println(string(fixedBytes[:]))
-	funcDir := outputDirPath + "/main"
-	os.MkdirAll(funcDir, 0755)
-	os.WriteFile(funcDir+"/main.go", fixedBytes, 0644)
-	os.Chdir(funcDir)
-	err = exec.Command("go", "mod", "init", "main").Run()
-	if err != nil {
-		fmt.Println(err)
+	if writeToConsole {
+		fmt.Println("------------------ File Main --------------------")
+		fmt.Println(string(fixedBytes[:]))
 	}
-	err = exec.Command("go", "mod", "tidy").Run()
-	if err != nil {
-		fmt.Println(err)
+	if writeToFiles {
+		funcDir := outputDirPath + "/main"
+		os.MkdirAll(funcDir, 0755)
+		os.WriteFile(funcDir+"/main.go", fixedBytes, 0644)
+		os.Chdir(funcDir)
+		err = exec.Command("go", "mod", "init", "main").Run()
+		if err != nil {
+			fmt.Println(err)
+		}
+		err = exec.Command("go", "mod", "tidy").Run()
+		if err != nil {
+			fmt.Println(err)
+		}
+		err = exec.Command("go", "build").Run()
+		if err != nil {
+			fmt.Println(err)
+		}
+		os.Chdir(workingDir)
+		os.WriteFile(outputDirPath+"/run.sh", []byte(getBashRunScript(funcNames)), 0755)
 	}
-	os.Chdir(workingDir)
 }
 
 func simpleMainBody(funcName string, portNum int) []ast.Stmt {
@@ -346,4 +363,36 @@ func getBody(src string) []ast.Stmt {
 	})
 
 	return rtn
+}
+
+func getBashRunScript(funcNames []string) string {
+	functionsList := "./" + funcNames[0] + "/" + funcNames[0]
+	for i := 1; i < len(funcNames); i++ {
+		functionsList += "\" \"./" + funcNames[i] + "/" + funcNames[i]
+	}
+
+	script := `
+  #!/bin/bash
+
+  # start the microservices as background processes
+  functions=("` + functionsList + `")
+  processes=()
+  for function in "${functions[@]}"; do
+    eval "$function &"
+    pid=$!
+    processes+=("$pid")
+  done
+
+  echo "$processes"
+  sleep 5 # wait for servers to spin up
+
+  ./main/main
+
+  # clean up the microservices
+  for process in "${processes[@]}"; do
+    kill "$process"
+  done
+  `
+
+	return script
 }

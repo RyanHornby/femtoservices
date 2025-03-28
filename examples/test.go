@@ -4,9 +4,12 @@ import "fmt"
 
 func main() {
 	test2()
+	fmt.Println("Ran test2")
 	a := 10
 	test1(a)
+	fmt.Println("Ran test1 with value: ", a)
 	a = test3(a)
+	fmt.Println("Ran test3. 'a' is now: ", a)
 	test1(a)
 }
 
