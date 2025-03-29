@@ -31,6 +31,7 @@ func main() {
 	outputDirPath := workingDir + "/output"
 	writeToConsole := true
 	writeToFiles := true
+	writeDockerService := true
 
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, filePath, nil, parser.AllErrors)
@@ -127,7 +128,7 @@ func main() {
 			fmt.Println("------------------ File " + funcNames[i] + " --------------------")
 			fmt.Println(string(fixedBytes[:]))
 		}
-		if writeToFiles {
+		if writeToFiles || writeDockerService {
 			funcDir := outputDirPath + "/" + funcNames[i]
 			os.MkdirAll(funcDir, 0755)
 			os.WriteFile(funcDir+"/main.go", fixedBytes, 0644)
@@ -140,10 +141,17 @@ func main() {
 			if err != nil {
 				fmt.Println(err)
 			}
-			err = exec.Command("go", "build").Run()
-			if err != nil {
-				fmt.Println(err)
+			if writeDockerService {
+				os.WriteFile(funcDir+"/Dockerfile", []byte(getDockerFile(funcNames[i])), 0644)
 			}
+			if writeToFiles {
+				err = exec.Command("go", "build").Run()
+				if err != nil {
+					fmt.Println(err)
+				}
+				os.WriteFile(outputDirPath+"/run.sh", []byte(getBashRunScript(funcNames)), 0755)
+			}
+
 			os.Chdir(workingDir)
 		}
 	}
@@ -160,7 +168,7 @@ func main() {
 		fmt.Println("------------------ File Main --------------------")
 		fmt.Println(string(fixedBytes[:]))
 	}
-	if writeToFiles {
+	if writeToFiles || writeDockerService {
 		funcDir := outputDirPath + "/main"
 		os.MkdirAll(funcDir, 0755)
 		os.WriteFile(funcDir+"/main.go", fixedBytes, 0644)
@@ -177,8 +185,13 @@ func main() {
 		if err != nil {
 			fmt.Println(err)
 		}
+		if writeDockerService {
+			os.WriteFile(outputDirPath+"/docker-compose.yml", []byte(getDockerComposeYML(funcNames, portNums)), 0755)
+		}
+		if writeToFiles {
+			os.WriteFile(outputDirPath+"/run.sh", []byte(getBashRunScript(funcNames)), 0755)
+		}
 		os.Chdir(workingDir)
-		os.WriteFile(outputDirPath+"/run.sh", []byte(getBashRunScript(funcNames)), 0755)
 	}
 }
 
@@ -371,28 +384,50 @@ func getBashRunScript(funcNames []string) string {
 		functionsList += "\" \"./" + funcNames[i] + "/" + funcNames[i]
 	}
 
-	script := `
-  #!/bin/bash
+	script := `#!/bin/bash
 
-  # start the microservices as background processes
-  functions=("` + functionsList + `")
-  processes=()
-  for function in "${functions[@]}"; do
-    eval "$function &"
-    pid=$!
-    processes+=("$pid")
-  done
+# start the microservices as background processes
+functions=("` + functionsList + `")
+processes=()
+for function in "${functions[@]}"; do
+  eval "$function &"
+  pid=$!
+  processes+=("$pid")
+done
 
-  echo "$processes"
-  sleep 5 # wait for servers to spin up
+echo "$processes"
+sleep 5 # wait for servers to spin up
 
-  ./main/main
+./main/main
 
-  # clean up the microservices
-  for process in "${processes[@]}"; do
-    kill "$process"
-  done
-  `
+# clean up the microservices
+for process in "${processes[@]}"; do
+  kill "$process"
+done`
 
 	return script
+}
+
+func getDockerFile(funcName string) string {
+	return `FROM golang:alpine as builder
+WORKDIR /src/service
+COPY go.mod go.sum main.go ./
+RUN go build -o ` + funcName + `
+FROM alpine
+WORKDIR /root/
+COPY --from=builder /src/service ./service
+CMD ["./service/` + funcName + `"]`
+}
+
+func getDockerComposeYML(funcNames []string, portNums []int) string {
+	outfile := "services:\n"
+	for i, funcName := range funcNames {
+		outfile += fmt.Sprintf("  %s:\n", funcName)
+		outfile += "    build:\n"
+		outfile += fmt.Sprintf("      context: ./%s\n", funcName)
+		outfile += fmt.Sprintf("      dockerfile: Dockerfile\n")
+		outfile += "    ports:\n"
+		outfile += fmt.Sprintf("      - \"%d:%d\"\n", portNums[i], portNums[i])
+	}
+	return outfile
 }
